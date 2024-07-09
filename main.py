@@ -1,3 +1,4 @@
+#%%
 import os, sys
 import numpy as np
 import torch
@@ -9,11 +10,12 @@ import wandb
 from termcolor import cprint
 from tqdm import tqdm
 
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from src.datasets import ThingsMEGDataset
 from src.models import BasicConvClassifier
 from src.utils import set_seed
 
-
+#%%
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def run(args: DictConfig):
     set_seed(args.seed)

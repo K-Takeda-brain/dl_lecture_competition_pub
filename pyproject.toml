@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "takeda"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.9,<3.11"
+jupyter = "^1.0.0"
+torch = "1.13.0+cu117"
+torchaudio = "0.13.0"
+torchvision = "0.14.0+cu117"
+torchmetrics = "0.11.4"
+einops = "*"
+mne="1.6.0"
+hydra-core="1.3.2"
+wandb="0.15.0"
+termcolor = "*"
+matplotlib = "^3.6.1"
+pandas = "^1.5.0"
+scipy = "*"
+scikit-learn = "*"
+numpy = "<2.0.0"
+efficientnet-pytorch = "^0.7.1"
+transformers = "^4.42.3"
+julius = "^0.2.7"
+bm = "^1.6.1"
+
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
