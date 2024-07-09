@@ -10,8 +10,18 @@ import math
 import typing as tp
 
 import mne
+from mne.datasets import sample, spm_face, testing
+from mne.io import (
+    read_raw_artemis123,
+    read_raw_bti,
+    read_raw_ctf,
+    read_raw_fif,
+    read_raw_kit,
+)
+from copy import deepcopy
 import torch
 from torch import nn
+import numpy as np
 
 #from ..studies.api import Recording
 
@@ -25,15 +35,15 @@ def pad_multiple(x: torch.Tensor, base: int):
     return torch.nn.functional.pad(x, (0, target - length))
 
 class MyMNEinfo:
-    def __init__(self, layout_name, channels_to_remove):
-        self.layout = mne.channels.find_layout(layout_name)
+    def __init__(self, info, channels_to_remove):
+        self.layout = mne.channels.find_layout(info)
         self.channels_to_remove = channels_to_remove
         self.modified_layout = self._create_modified_layout()
         self.ch_names = self.modified_layout.names
 
     def _create_modified_layout(self):
         selected_names = [name for name in self.layout.names if name not in self.channels_to_remove]
-        new_layout = self.layout.copy()
+        new_layout = deepcopy(self.layout)
         new_layout.names = selected_names
         new_layout.pos = [self.layout.pos[idx] for idx, name in enumerate(self.layout.names) if name not in self.channels_to_remove]
         new_layout.ids = [self.layout.ids[idx] for idx, name in enumerate(self.layout.names) if name not in self.channels_to_remove]
@@ -45,7 +55,6 @@ class MyMNEinfo:
     def get_layout_info(self):
         return self.modified_layout
 
-recording = MyMNEinfo("CTF275", ["MLF25",  "MRF43", "MRO13", "MRO11"]) #MLF25,  MRF43, MRO13, MRO11
 
 class ScaledEmbedding(nn.Module):
     """Scale up learning rate for the embedding, otherwise, it can move too slowly.
@@ -210,11 +219,6 @@ class PositionGetter:
         self._invalid_names: tp.Set[str] = set()
 
     def get_recording_layout(self, recording) -> torch.Tensor:
-        #index = recording.recording_index
-        #if index in self._cache:
-        #    return self._cache[index]
-        #else:
-        #info = recording.mne_info
         layout = recording.get_layout_info()
         indexes: tp.List[int] = []
         valid_indexes: tp.List[int] = []
@@ -227,36 +231,90 @@ class PositionGetter:
                     logger.warning(
                         "Channels %s not in layout for recording %s of %s.",
                         name,
-                        #recording.study_name(),
-                        #recording.recording_uid
-                        )
+                    )
                     self._invalid_names.add(name)
             else:
                 valid_indexes.append(meg_index)
 
         positions = torch.full((len(recording.ch_names), 2), self.INVALID)
-        x, y = layout.pos[indexes, :2].T
+        pos_array = np.array(layout.pos)
+        x, y = pos_array[indexes, :2].T
         x = (x - x.min()) / (x.max() - x.min())
         y = (y - y.min()) / (y.max() - y.min())
         x = torch.from_numpy(x).float()
         y = torch.from_numpy(y).float()
         positions[valid_indexes, 0] = x
         positions[valid_indexes, 1] = y
-        #self._cache[index] = positions
         return positions
 
     def get_positions(self, batch):
-        meg = batch.meg
+        meg = batch['meg']
         B, C, T = meg.shape
         positions = torch.full((B, C, 2), self.INVALID, device=meg.device)
-        for idx in range(len(batch)):
-            #recording = batch._recordings[idx]
-            rec_pos = self.get_recording_layout(recording)
+        for idx in range(B):
+            rec_pos = self.get_recording_layout(batch['recording'][idx])
             positions[idx, :len(rec_pos)] = rec_pos.to(meg.device)
         return positions
 
     def is_invalid(self, positions):
         return (positions == self.INVALID).all(dim=-1)
+
+
+#class PositionGetter:
+#    INVALID = -0.1
+#
+#    def __init__(self) -> None:
+#        self._cache: tp.Dict[int, torch.Tensor] = {}
+#        self._invalid_names: tp.Set[str] = set()
+#
+#    def get_recording_layout(self, recording) -> torch.Tensor:
+#        #index = recording.recording_index
+#        #if index in self._cache:
+#        #    return self._cache[index]
+#        #else:
+#        #info = recording.mne_info
+#        layout = recording.get_layout_info()
+#        indexes: tp.List[int] = []
+#        valid_indexes: tp.List[int] = []
+#        for meg_index, name in enumerate(recording.ch_names):
+#            name = name.rsplit("-", 1)[0]
+#            try:
+#                indexes.append(layout.names.index(name))
+#            except ValueError:
+#                if name not in self._invalid_names:
+#                    logger.warning(
+#                        "Channels %s not in layout for recording %s of %s.",
+#                        name,
+#                        #recording.study_name(),
+#                        #recording.recording_uid
+#                        )
+#                    self._invalid_names.add(name)
+#            else:
+#                valid_indexes.append(meg_index)
+#
+#        positions = torch.full((len(recording.ch_names), 2), self.INVALID)
+#        x, y = layout.pos[indexes, :2].T
+#        x = (x - x.min()) / (x.max() - x.min())
+#        y = (y - y.min()) / (y.max() - y.min())
+#        x = torch.from_numpy(x).float()
+#        y = torch.from_numpy(y).float()
+#        positions[valid_indexes, 0] = x
+#        positions[valid_indexes, 1] = y
+#        #self._cache[index] = positions
+#        return positions
+#
+#    def get_positions(self, batch):
+#        meg = batch.meg
+#        B, C, T = meg.shape
+#        positions = torch.full((B, C, 2), self.INVALID, device=meg.device)
+#        for idx in range(len(batch)):
+#            #recording = batch._recordings[idx]
+#            rec_pos = self.get_recording_layout(recording)
+#            positions[idx, :len(rec_pos)] = rec_pos.to(meg.device)
+#        return positions
+#
+#    def is_invalid(self, positions):
+#        return (positions == self.INVALID).all(dim=-1)
 
 
 class FourierEmb(nn.Module):
@@ -295,12 +353,7 @@ class FourierEmb(nn.Module):
 
 
 class ChannelDropout(nn.Module):
-    def __init__(self, dropout: float = 0.1, rescale: bool = True):
-        """
-        Args:
-            dropout: dropout radius in normalized [0, 1] coordinates.
-            rescale: at valid, rescale all channels.
-        """
+    def __init__(self, dropout: float, rescale: bool = True):
         super().__init__()
         self.dropout = dropout
         self.rescale = rescale
@@ -309,27 +362,23 @@ class ChannelDropout(nn.Module):
     def forward(self, meg, batch):
         if not self.dropout:
             return meg
-
+        if meg.dim() != 3:
+            raise ValueError(f"Expected input meg to have 3 dimensions (B, C, T), but got {meg.dim()} dimensions")
+        
         B, C, T = meg.shape
         meg = meg.clone()
         positions = self.position_getter.get_positions(batch)
         valid = (~self.position_getter.is_invalid(positions)).float()
         meg = meg * valid[:, :, None]
-
+        
         if self.training:
-            center_to_ban = torch.rand(2, device=meg.device)
-            kept = (positions - center_to_ban).norm(dim=-1) > self.dropout
-            meg = meg * kept.float()[:, :, None]
+            mask = torch.rand(B, C, 1, device=meg.device) > self.dropout
+            meg = meg * mask
             if self.rescale:
-                proba_kept = torch.zeros(B, C, device=meg.device)
-                n_tests = 100
-                for _ in range(n_tests):
-                    center_to_ban = torch.rand(2, device=meg.device)
-                    kept = (positions - center_to_ban).norm(dim=-1) > self.dropout
-                    proba_kept += kept.float() / n_tests
-                meg = meg / (1e-8 + proba_kept[:, :, None])
-
+                meg = meg / (1.0 - self.dropout)
+        
         return meg
+
 
 
 class ChannelMerger(nn.Module):
@@ -370,10 +419,16 @@ class ChannelMerger(nn.Module):
 
         if self.per_subject:
             _, cout, pos_dim = self.heads.shape
-            subject = batch.subject_index
+            subject = batch['subject_index']
             heads = self.heads.gather(0, subject.view(-1, 1, 1).expand(-1, cout, pos_dim))
         else:
             heads = self.heads[None].expand(B, -1, -1)
+
+        # Adjust embedding size to match heads size
+        if embedding.size(1) > heads.size(1):
+            embedding = embedding[:, :heads.size(1), :]
+        elif embedding.size(1) < heads.size(1):
+            heads = heads[:, :embedding.size(1), :]
 
         scores = torch.einsum("bcd,bod->boc", embedding, heads)
         scores += score_offset[:, None]
@@ -383,3 +438,70 @@ class ChannelMerger(nn.Module):
             usage = weights.mean(dim=(0, 1)).sum()
             self._penalty = self.usage_penalty * usage
         return out
+#class ChannelMerger(nn.Module):
+#    def __init__(self, chout: int, pos_dim: int = 256,
+#                 dropout: float = 0, usage_penalty: float = 0.,
+#                 n_subjects: int = 200, per_subject: bool = False):
+#        super().__init__()
+#        assert pos_dim % 4 == 0
+#        self.position_getter = PositionGetter()
+#        self.per_subject = per_subject
+#        if self.per_subject:
+#            self.heads = nn.Parameter(torch.randn(n_subjects, chout, pos_dim, requires_grad=True))
+#        else:
+#            self.heads = nn.Parameter(torch.randn(chout, pos_dim, requires_grad=True))
+#        self.heads.data /= pos_dim ** 0.5
+#        self.dropout = dropout
+#        self.embedding = FourierEmb(pos_dim)
+#        self.usage_penalty = usage_penalty
+#        self._penalty = torch.tensor(0.)
+#
+#    @property
+#    def training_penalty(self):
+#        return self._penalty.to(next(self.parameters()).device)
+#
+#    def forward(self, meg, batch):
+#        B, C, T = meg.shape
+#        meg = meg.clone()
+#        positions = self.position_getter.get_positions(batch)
+#        embedding = self.embedding(positions)
+#        score_offset = torch.zeros(B, C, device=meg.device)
+#        score_offset[self.position_getter.is_invalid(positions)] = float('-inf')
+#
+#        if self.training and self.dropout:
+#            center_to_ban = torch.rand(2, device=meg.device)
+#            radius_to_ban = self.dropout
+#            banned = (positions - center_to_ban).norm(dim=-1) <= radius_to_ban
+#            score_offset[banned] = float('-inf')
+#
+#        if self.per_subject:
+#            _, cout, pos_dim = self.heads.shape
+#            subject = batch.subject_index
+#            heads = self.heads.gather(0, subject.view(-1, 1, 1).expand(-1, cout, pos_dim))
+#        else:
+#            heads = self.heads[None].expand(B, -1, -1)
+#
+#        scores = torch.einsum("bcd,bod->boc", embedding, heads)
+#        scores += score_offset[:, None]
+#        weights = torch.softmax(scores, dim=2)
+#        out = torch.einsum("bct,boc->bot", meg, weights)
+#        if self.training and self.usage_penalty > 0.:
+#            usage = weights.mean(dim=(0, 1)).sum()
+#            self._penalty = self.usage_penalty * usage
+#        return out
+
+class SpatialAttention(nn.Module):
+    def __init__(self, in_channels, out_channels, pos_dim):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.position_embedding = nn.Parameter(torch.randn(2, pos_dim))
+        self.attention_weights = nn.Parameter(torch.randn(out_channels, pos_dim))
+
+    def forward(self, x, positions):
+        B, C, T = x.shape
+        pos_embed = positions @ self.position_embedding  # [B, C, 2] @ [2, pos_dim] -> [B, C, pos_dim]
+        pos_embed = pos_embed.transpose(1, 2)  # [B, pos_dim, C]
+        attention = torch.softmax(self.attention_weights @ pos_embed, dim=-1)  # [out_channels, pos_dim] @ [B, pos_dim, C] -> [B, out_channels, C]
+        x = torch.einsum('bct,boc->bot', x, attention)  # [B, C, T] @ [B, out_channels, C] -> [B, out_channels, T]
+        return x

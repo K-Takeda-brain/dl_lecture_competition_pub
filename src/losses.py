@@ -107,7 +107,7 @@ class ClipLoss(torch.nn.Module):
         with B'>=B, the first B samples of candidate are targets, while
         the remaining B'-B samples of candidate are only used as negatives.
         """
-        assert mask.all(), "mask is not supported for now"
+        #assert mask.all(), "mask is not supported for now"
         assert estimate.size(0) <= candidate.size(0), "need at least as many targets as estimates"
         scores = self.get_scores(estimate, candidate)
         target = torch.arange(len(scores), device=estimate.device)

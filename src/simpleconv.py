@@ -15,22 +15,19 @@ import torchaudio as ta
 
 from .common import (
     ConvSequence, ScaledEmbedding, SubjectLayers,
-    DualPathRNN, ChannelMerger, ChannelDropout, pad_multiple
+    DualPathRNN, PositionGetter, ChannelDropout, pad_multiple, SpatialAttention
 )
 
 
 class SimpleConv(nn.Module):
     def __init__(self,
-                 # Channels
                  in_channels: tp.Dict[str, int],
                  out_channels: int,
                  hidden: tp.Dict[str, int],
-                 # Overall structure
                  depth: int = 4,
-                 concatenate: bool = False,  # concatenate the inputs
+                 concatenate: bool = False,
                  linear_out: bool = False,
                  complex_out: bool = False,
-                 # Conv layer
                  kernel_size: int = 5,
                  growth: float = 1.,
                  dilation_growth: int = 2,
@@ -44,30 +41,21 @@ class SimpleConv(nn.Module):
                  glu_context: int = 0,
                  glu_glu: bool = True,
                  gelu: bool = False,
-                 # Dual path RNN
                  dual_path: int = 0,
-                 # Dropouts, BN, activations
                  conv_dropout: float = 0.0,
                  dropout_input: float = 0.0,
                  batch_norm: bool = False,
                  relu_leakiness: float = 0.0,
-                 # Subject specific settings
                  n_subjects: int = 200,
                  subject_dim: int = 64,
                  subject_layers: bool = False,
-                 subject_layers_dim: str = "input",  # or hidden
+                 subject_layers_dim: str = "input",
                  subject_layers_id: bool = False,
                  embedding_scale: float = 1.0,
-                 # stft transform
                  n_fft: tp.Optional[int] = None,
                  fft_complex: bool = True,
-                 # Attention multi-dataset support
-                 merger: bool = False,
-                 merger_pos_dim: int = 256,
-                 merger_channels: int = 270,
-                 merger_dropout: float = 0.2,
-                 merger_penalty: float = 0.,
-                 merger_per_subject: bool = False,
+                 spatial_attention: bool = False,
+                 pos_dim: int = 256,
                  dropout: float = 0.,
                  dropout_rescale: bool = True,
                  initial_linear: int = 0,
@@ -91,7 +79,6 @@ class SimpleConv(nn.Module):
 
         assert kernel_size % 2 == 1, "For padding to work, this must be verified"
 
-        self.merger = None
         self.dropout = None
         self.subsampled_meg_channels: tp.Optional[list] = None
         if subsample_meg_channels:
@@ -101,15 +88,15 @@ class SimpleConv(nn.Module):
             rng.shuffle(indexes)
             self.subsampled_meg_channels = indexes[:subsample_meg_channels]
 
-        self.initial_linear = None
         if dropout > 0.:
             self.dropout = ChannelDropout(dropout, dropout_rescale)
-        if merger:
-            self.merger = ChannelMerger(
-                merger_channels, pos_dim=merger_pos_dim, dropout=merger_dropout,
-                usage_penalty=merger_penalty, n_subjects=n_subjects, per_subject=merger_per_subject)
-            in_channels["meg"] = merger_channels
 
+        self.spatial_attention = None
+        if spatial_attention:
+            self.spatial_attention = SpatialAttention(in_channels['meg'], out_channels, pos_dim)
+            self.position_getter = PositionGetter()
+
+        self.initial_linear = None
         if initial_linear:
             init = [nn.Conv1d(in_channels["meg"], initial_linear, 1)]
             for _ in range(initial_depth - 1):
@@ -196,8 +183,8 @@ class SimpleConv(nn.Module):
                                        for name, channels in sizes.items()})
 
     def forward(self, inputs, batch):
-        subjects = batch.subject_index
-        length = next(iter(inputs.values())).shape[-1]  # length of any of the inputs
+        subjects = batch['subject_index']
+        length = next(iter(inputs.values())).shape[-1]
 
         if self.subsampled_meg_channels is not None:
             mask = torch.zeros_like(inputs["meg"][:1, :, :1])
@@ -207,8 +194,9 @@ class SimpleConv(nn.Module):
         if self.dropout is not None:
             inputs["meg"] = self.dropout(inputs["meg"], batch)
 
-        if self.merger is not None:
-            inputs["meg"] = self.merger(inputs["meg"], batch)
+        if self.spatial_attention is not None:
+            positions = self.position_getter.get_positions(batch)
+            inputs["meg"] = self.spatial_attention(inputs["meg"], positions)
 
         if self.initial_linear is not None:
             inputs["meg"] = self.initial_linear(inputs["meg"])
@@ -228,7 +216,7 @@ class SimpleConv(nn.Module):
             inputs["meg"] = z
 
         if self.subject_embedding is not None:
-            emb = self.subject_embedding(subjects)[:, :, None]
+            emb = self.subject_embedding(subjects).view(subjects.size(0), -1, 1)
             inputs["meg"] = torch.cat([inputs["meg"], emb.expand(-1, -1, length)], dim=1)
 
         if self._concatenate:

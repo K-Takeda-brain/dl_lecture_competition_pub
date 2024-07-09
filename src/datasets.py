@@ -5,19 +5,62 @@ from typing import Tuple
 from termcolor import cprint
 import dataclasses
 import typing as tp
+from torch.utils.data import DataLoader, Dataset
 
+from torch.utils.data import DataLoader
+
+def custom_collate(batch):
+    batch_dict = {}
+    for key in batch[0]:
+        if key == 'recording':
+            batch_dict[key] = [item[key] for item in batch]  # list of MyMNEinfo objects
+        else:
+            batch_dict[key] = torch.stack([item[key] for item in batch], dim=0)
+    return batch_dict
+
+class MEGDataset(Dataset):
+    def __init__(self, meg_data, image_feature_dir, image_list_file):
+        self.meg_data = meg_data['data']
+        self.labels = meg_data.get('labels')
+        self.subject_idxs = meg_data['subject_idxs']
+        self.image_feature_dir = image_feature_dir
+
+        # Read the image list file
+        with open(image_list_file, 'r') as f:
+            self.image_list = [line.strip() for line in f.readlines()]
+
+    def __len__(self):
+        return len(self.meg_data)
+
+    def __getitem__(self, idx):
+        meg = self.meg_data[idx]
+        subject_idx = self.subject_idxs[idx]
+
+        # Extract the corresponding image feature
+        image_name = self.image_list[idx]
+        image_feature_path = os.path.join(self.image_feature_dir, image_name.replace('.jpg', '.npy'))
+        image_feature = np.load(image_feature_path)
+
+        sample = {
+            'meg': torch.tensor(meg, dtype=torch.float32),
+            'image_feature': torch.tensor(image_feature, dtype=torch.float32),
+            'subject_index': subject_idx
+        }
+
+        if self.labels is not None:
+            sample['label'] = self.labels[idx]
+
+        return sample
+
+        
 @dataclasses.dataclass
 class SegmentBatch:
-    """Collatable training data."""
     meg: torch.Tensor
-    
     features: torch.Tensor
     features_mask: torch.Tensor
     subject_index: torch.Tensor
     recording_index: torch.Tensor
-    # optional for now
-    #_recordings: tp.List[studies.Recording] = dataclasses.field(default_factory=list)
-    #_event_lists: tp.List[tp.List[Event]] = dataclasses.field(default_factory=list)
+    positions: torch.Tensor
 
     def to(self, device: tp.Any) -> "SegmentBatch":
         """Creates a new instance on the appropriate device."""
@@ -66,7 +109,7 @@ class SegmentBatch:
         for field in dataclasses.fields(cls):
             data = [getattr(mf, field.name) for mf in meg_features_list]
             if isinstance(data[0], torch.Tensor):
-                out[field.name] = torch.stack(data)
+                out[field.name] = torch.cat([d.unsqueeze(0) for d in data], dim=0)
             else:
                 out[field.name] = [x for y in data for x in y]
         meg_features = SegmentBatch(**out)
@@ -77,6 +120,7 @@ class SegmentBatch:
             if isinstance(val, list):
                 assert len(val) in (0, batch_size), f"Incorrect size for {field.name}"
         return meg_features
+
 
 
 class ThingsMEGDataset(torch.utils.data.Dataset):
