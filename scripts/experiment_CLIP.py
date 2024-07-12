@@ -45,10 +45,17 @@ train_set = ThingsMEGDataset("train", args.data_dir)
 val_set = ThingsMEGDataset("val", args.data_dir)
 test_set = ThingsMEGDataset("test", args.data_dir)
 
+raw = read_raw_ctf(
+    spm_face.data_path() / "MEG" / "spm" / "SPM_CTF_MEG_example_faces1_3D.ds"
+)
+info = raw.info
+recording = MyMNEinfo(info, ["MLF25",  "MRF43", "MRO13", "MRO11"]) #MLF25,  MRF43, MRO13, MRO11
+
 train_meg_data = {
     'data': train_set.X,
     'subject_idxs': train_set.subject_idxs,
-    'label': train_set.y
+    'label': train_set.y,
+    'recording':[recording]*4
 }
 
 train_meg = MEGDataset(train_meg_data, image_feature_dir, train_image_list_file)
@@ -57,11 +64,6 @@ dataloader = DataLoader(train_meg, batch_size=16, shuffle=True)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # %%
-raw = read_raw_ctf(
-    spm_face.data_path() / "MEG" / "spm" / "SPM_CTF_MEG_example_faces1_3D.ds"
-)
-info = raw.info
-recording = MyMNEinfo(info, ["MLF25",  "MRF43", "MRO13", "MRO11"]) #MLF25,  MRF43, MRO13, MRO11
 
 model = SimpleConv(
     in_channels={"meg": 271},
@@ -88,7 +90,7 @@ def train_model(model, dataloader, criterion, optimizer, num_epochs=10):
             subject_index_batch = batch['subject_index'].to(device)
 
             # フォワードパス
-            outputs = model({'meg': meg_batch}, {'subject_index': subject_index_batch})
+            outputs = model(meg_batch, batch)
             loss = criterion(outputs, image_feature_batch)
 
             # バックワードパスと最適化

@@ -1,3 +1,4 @@
+#%%
 import os
 import numpy as np
 import torch
@@ -7,7 +8,16 @@ import dataclasses
 import typing as tp
 from torch.utils.data import DataLoader, Dataset
 
-from torch.utils.data import DataLoader
+import mne
+from mne.datasets import sample, spm_face, testing
+from mne.io import (
+    read_raw_artemis123,
+    read_raw_bti,
+    read_raw_ctf,
+    read_raw_fif,
+    read_raw_kit,
+)
+from copy import deepcopy
 
 def custom_collate(batch):
     batch_dict = {}
@@ -24,6 +34,7 @@ class MEGDataset(Dataset):
         self.labels = meg_data.get('labels')
         self.subject_idxs = meg_data['subject_idxs']
         self.image_feature_dir = image_feature_dir
+        self.recording = meg_data['recording']
 
         # Read the image list file
         with open(image_list_file, 'r') as f:
@@ -124,28 +135,32 @@ class SegmentBatch:
 
 
 class ThingsMEGDataset(torch.utils.data.Dataset):
-    def __init__(self, split: str, data_dir: str = "data") -> None:
+    def __init__(self, split: str, data_dir: str = "data", recording = None) -> None:
         super().__init__()
         
         assert split in ["train", "val", "test"], f"Invalid split: {split}"
         self.split = split
         self.num_classes = 1854
         
-        self.X = torch.load(os.path.join(data_dir, f"{split}_X.pt"))
+        self.X = torch.load(os.path.join(data_dir, f"{split}_X_preprocessed.pt"))
         self.subject_idxs = torch.load(os.path.join(data_dir, f"{split}_subject_idxs.pt"))
         
         if split in ["train", "val"]:
             self.y = torch.load(os.path.join(data_dir, f"{split}_y.pt"))
+            self.image_features = torch.load(os.path.join(data_dir, f"{split}_X_image.pt"))
             assert len(torch.unique(self.y)) == self.num_classes, "Number of classes do not match."
+        
+        self.channel_pos = recording.get_channel_positions()
+        self.channel_pos = torch.tensor(self.channel_pos, dtype=torch.float32)
 
     def __len__(self) -> int:
         return len(self.X)
 
     def __getitem__(self, i):
         if hasattr(self, "y"):
-            return self.X[i], self.y[i], self.subject_idxs[i]
+            return self.X[i], self.y[i], self.subject_idxs[i], self.channel_pos, self.image_features[i]
         else:
-            return self.X[i], self.subject_idxs[i]
+            return self.X[i], self.subject_idxs[i], self.channel_pos
         
     @property
     def num_channels(self) -> int:
@@ -154,3 +169,40 @@ class ThingsMEGDataset(torch.utils.data.Dataset):
     @property
     def seq_len(self) -> int:
         return self.X.shape[2]
+
+class MyMNEinfo:
+    def __init__(self, info, channels_to_remove):
+        self.layout = mne.channels.find_layout(info)
+        self.channels_to_remove = channels_to_remove
+        self.modified_layout = self._create_modified_layout()
+        self.ch_names = self.modified_layout.names
+
+    def _create_modified_layout(self):
+        selected_names = [name for name in self.layout.names if name not in self.channels_to_remove]
+        new_layout = deepcopy(self.layout)
+        new_layout.names = selected_names
+        new_layout.pos = [self.layout.pos[idx] for idx, name in enumerate(self.layout.names) if name not in self.channels_to_remove]
+        new_layout.ids = [self.layout.ids[idx] for idx, name in enumerate(self.layout.names) if name not in self.channels_to_remove]
+        return new_layout
+
+    def plot_layout(self):
+        self.modified_layout.plot()
+
+    def get_layout_info(self):
+        return self.modified_layout
+    
+    def get_channel_positions(self):
+        pos = np.array(self.modified_layout.pos)
+        pos = pos[:, :2]
+        return pos
+
+#%%
+if __name__ == "__main__":
+    raw = read_raw_ctf(
+        spm_face.data_path() / "MEG" / "spm" / "SPM_CTF_MEG_example_faces1_3D.ds"
+    )
+    info = raw.info
+    recording = MyMNEinfo(info, ["MLF25",  "MRF43", "MRO13", "MRO11"]) #MLF25,  MRF43, MRO13, MRO11
+    
+    pos = recording.get_channel_positions()
+# %%
