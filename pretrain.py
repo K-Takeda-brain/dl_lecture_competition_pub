@@ -36,10 +36,11 @@ if torch.cuda.is_available():
 # CUDAデバイスの初期化
 torch.cuda.init()
 #%%
-@hydra.main(version_base=None, config_path="configs", config_name="config")
+@hydra.main(version_base=None, config_path="configs", config_name="config_pretrain")
 def run(args: DictConfig):
     set_seed(args.seed)
     logdir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+    save_dir = os.path.join("outputs", "pretrain")
     
     if args.use_wandb:
         wandb.init(mode="online", dir=logdir, project="MEG-classification")
@@ -73,93 +74,68 @@ def run(args: DictConfig):
     
     if args.multi_gpu:
         model = torch.nn.DataParallel(model, device_ids=args.device_ids)
-    
-    if args.pretrain:
-        weights = torch.load(os.path.join("outputs", "pretrain", "model_pretrain_best.pt"))
-        # to load the model trained with DataParallel to model without DataParallel
-        weights = {k.replace("module.", ""): v for k, v in weights.items()} 
-        model.load_state_dict(weights) #, map_location=args.device
-    
-    model.classify = True
 
     # ------------------
     #     Optimizer
     # ------------------
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
-        
     
+    #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
+
     # ------------------
-    #   Start fine-tuning
-    # ------------------  
-    # load pretrained model
-    
+    # Start pretraining
+    # ------------------
+    # pretraining using CLIP loass
     max_val_acc = 0
-    accuracy = Accuracy(
-        task="multiclass", num_classes=train_set.num_classes, top_k=10
-    ).to(args.device)
-      
-    for epoch in range(args.epochs):
-        print(f"Epoch {epoch+1}/{args.epochs}")
+    for epoch in range(args.pretrain_epochs):
+        print(f"Pretrain Epoch {epoch+1}/{args.pretrain_epochs}")
         
-        train_loss, train_acc, val_loss, val_acc = [], [], [], []
+        train_loss = []
+        train_acc = []
+        val_loss = []
+        val_acc = []
         
         model.train()
-        for X, y, subject_idxs, pos, _ in tqdm(train_loader, desc="Train"):
-            X, y, subject_idxs, pos = X.to(args.device), y.to(args.device), subject_idxs.to(args.device), pos.to(args.device)
+        for X, _, subject_idxs, pos, image_feature in tqdm(train_loader, desc="Pretrain"):
+            X, subject_idxs, pos, image_feature = X.to(args.device), subject_idxs.to(args.device), pos.to(args.device), image_feature.to(args.device)
 
             y_pred = model(X, subject_idxs, pos)
-            
-            loss = F.cross_entropy(y_pred, y)
+            probability, label = CLIPLoss().get_probabilities(y_pred, image_feature)
+            loss = CLIPLoss()(y_pred, image_feature)
             train_loss.append(loss.item())
+            
+            # calculate top 1 accuracy
+            acc = torch.sum(torch.argmax(probability, dim=1) == label) / len(label)
+            train_acc.append(acc.item())
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
-            acc = accuracy(y_pred, y)
-            train_acc.append(acc.item())
-
+        scheduler.step(np.mean(train_loss))
+        
         model.eval()
-        for X, y, subject_idxs, pos, _ in tqdm(val_loader, desc="Validation"):
-            X, y, subject_idxs, pos = X.to(args.device), y.to(args.device), subject_idxs.to(args.device), pos.to(args.device)
+        for X, _, subject_idxs, pos, image_feature in tqdm(val_loader, desc="Validation"):
+            X, subject_idxs, pos, image_feature = X.to(args.device), subject_idxs.to(args.device), pos.to(args.device), image_feature.to(args.device)
             
             with torch.no_grad():
                 y_pred = model(X, subject_idxs, pos)
+                probability, label = CLIPLoss().get_probabilities(y_pred, image_feature)
+                loss = CLIPLoss()(y_pred, image_feature)
+                val_loss.append(loss.item())
+                
+                # calculate accuracy
+                acc = torch.sum(torch.argmax(probability, dim=1) == label) / len(label)
+                val_acc.append(acc.item())
             
-            val_loss.append(F.cross_entropy(y_pred, y).item())
-            val_acc.append(accuracy(y_pred, y).item())
-
-        print(f"Epoch {epoch+1}/{args.epochs} | train loss: {np.mean(train_loss):.3f} | train acc: {np.mean(train_acc):.3f} | val loss: {np.mean(val_loss):.3f} | val acc: {np.mean(val_acc):.3f}")
-        torch.save(model.state_dict(), os.path.join(logdir, "model_last.pt"))
+        print(f"Pretrain Epoch {epoch+1}/{args.pretrain_epochs} | train loss: {np.mean(train_loss):.3f} | train acc: {np.mean(train_acc):.3f} | val loss: {np.mean(val_loss):.3f} | val acc: {np.mean(val_acc):.3f}")
+        torch.save(model.state_dict(), os.path.join(logdir, "model_pretrain_last.pt"))
         if args.use_wandb:
-            wandb.log({"train_loss": np.mean(train_loss), "train_acc": np.mean(train_acc), "val_loss": np.mean(val_loss), "val_acc": np.mean(val_acc)})
-        
+            wandb.log({"pretrain_loss": np.mean(train_loss)})
         if np.mean(val_acc) > max_val_acc:
             cprint("New best.", "cyan")
-            torch.save(model.state_dict(), os.path.join(logdir, "model_best.pt"))
+            torch.save(model.state_dict(), os.path.join(logdir, "model_pretrain_best.pt"))
+            torch.save(model.state_dict(), os.path.join(save_dir, "model_pretrain_best.pt"))
             max_val_acc = np.mean(val_acc)
-            
-    
-    # ----------------------------------
-    #  Start evaluation with best model
-    # ----------------------------------
-    #weights = torch.load(os.path.join(logdir, "model_best.pt"))
-    ## to load the model trained with DataParallel to model without DataParallel
-    #weights = {k.replace("module.", ""): v for k, v in weights.items()}
-    #model.load_state_dict(weights)
-    model.load_state_dict(torch.load(os.path.join(logdir, "model_best.pt"), map_location=args.device))
-
-    preds = [] 
-    model.eval()
-    for X, subject_idxs, pos in tqdm(test_loader, desc="Validation"):     
-        X, subject_idxs, pos = X.to(args.device), subject_idxs.to(args.device), pos.to(args.device)
-        y_pred = model(X, subject_idxs, pos)  
-        preds.append(y_pred.detach().cpu())
-        
-    preds = torch.cat(preds, dim=0).numpy()
-    np.save(os.path.join(logdir, "submission"), preds)
-    cprint(f"Submission {preds.shape} saved at {logdir}", "cyan")
-
 
 if __name__ == "__main__":
     run()

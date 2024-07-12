@@ -48,7 +48,7 @@ class BasicConvClassifier(nn.Module):
         glu_glu: bool = True,
         gelu: bool = False,
         dual_path: int = 0,
-        conv_dropout: float = 0.1,
+        conv_dropout: float = 0.5,
         dropout_input: float = 0.0,
         batch_norm: bool = True,
         relu_leakiness: float = 0.0,
