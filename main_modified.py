@@ -81,13 +81,21 @@ def run(args: DictConfig):
         model.load_state_dict(weights) #, map_location=args.device
     
     model.classify = True
+    
+    ## モデル全体のパラメータの勾配計算を無効にする
+    #for param in model.parameters():
+    #    param.requires_grad = False
+    #
+    ## 分類ヘッドのパラメータの勾配計算を有効にする
+    #for param in model.classifier.parameters():
+    #    param.requires_grad = True
 
     # ------------------
     #     Optimizer
     # ------------------
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-3)
         
-    
+    #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)
     # ------------------
     #   Start fine-tuning
     # ------------------  
@@ -118,7 +126,8 @@ def run(args: DictConfig):
             
             acc = accuracy(y_pred, y)
             train_acc.append(acc.item())
-
+        #scheduler.step(np.mean(train_loss))
+        
         model.eval()
         for X, y, subject_idxs, pos, _ in tqdm(val_loader, desc="Validation"):
             X, y, subject_idxs, pos = X.to(args.device), y.to(args.device), subject_idxs.to(args.device), pos.to(args.device)
@@ -128,6 +137,7 @@ def run(args: DictConfig):
             
             val_loss.append(F.cross_entropy(y_pred, y).item())
             val_acc.append(accuracy(y_pred, y).item())
+        #scheduler.step(np.mean(val_loss))
 
         print(f"Epoch {epoch+1}/{args.epochs} | train loss: {np.mean(train_loss):.3f} | train acc: {np.mean(train_acc):.3f} | val loss: {np.mean(val_loss):.3f} | val acc: {np.mean(val_acc):.3f}")
         torch.save(model.state_dict(), os.path.join(logdir, "model_last.pt"))

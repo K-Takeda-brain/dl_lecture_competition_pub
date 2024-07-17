@@ -25,7 +25,7 @@ def get_image_paths(folder_path):
     return image_paths
 
 class ImageFeatureExtractor:
-    def __init__(self, model_name="openai/clip-vit-base-patch16"):
+    def __init__(self, model_name="openai/clip-vit-large-patch14"):
         """
         CLIPモデルとプロセッサを初期化します。
         
@@ -119,15 +119,15 @@ def pack_image_files(image_list, feature_folder):
 #%%
 if __name__ == "__main__":
     folder_path = "../data/image/Images/"
-    save_folder = "../data/image/CLIPvision/"
+    save_folder = "../data/image/CLIPvision_large/"
 
     image_paths = get_image_paths(folder_path)
 
-    #extractor = ImageFeatureExtractor()
-    #extractor.save_features(image_paths, save_folder)
+    extractor = ImageFeatureExtractor()
+    extractor.save_features(image_paths, save_folder)
     
-    fix_file("../data/train_image_paths.txt")
-    fix_file("../data/val_image_paths.txt")
+    #fix_file("../data/train_image_paths.txt")
+    #fix_file("../data/val_image_paths.txt")
     
     for split in ['train', 'val']:
         image_list_path = f"../data/{split}_image_paths.txt"
@@ -135,6 +135,6 @@ if __name__ == "__main__":
         with open(image_list_path, 'r') as f:
             image_list = open(image_list_path).read().splitlines()
         features = pack_image_files(image_list, save_folder)
-        torch.save(features, f"../data/{split}_X_image.pt")
+        torch.save(features, f"../data/{split}_X_image_large.pt")
     
 # %%

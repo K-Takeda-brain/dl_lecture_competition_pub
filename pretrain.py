@@ -80,8 +80,9 @@ def run(args: DictConfig):
     # ------------------
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
     
-    #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
-
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5)
+    #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10, eta_min=1e-6)
+    
     # ------------------
     # Start pretraining
     # ------------------
@@ -102,6 +103,7 @@ def run(args: DictConfig):
             y_pred = model(X, subject_idxs, pos)
             probability, label = CLIPLoss().get_probabilities(y_pred, image_feature)
             loss = CLIPLoss()(y_pred, image_feature)
+            loss += 0.1 * F.mse_loss(y_pred, image_feature)
             train_loss.append(loss.item())
             
             # calculate top 1 accuracy
@@ -111,7 +113,7 @@ def run(args: DictConfig):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        scheduler.step(np.mean(train_loss))
+        #scheduler.step(np.mean(train_loss))
         
         model.eval()
         for X, _, subject_idxs, pos, image_feature in tqdm(val_loader, desc="Validation"):
@@ -121,11 +123,13 @@ def run(args: DictConfig):
                 y_pred = model(X, subject_idxs, pos)
                 probability, label = CLIPLoss().get_probabilities(y_pred, image_feature)
                 loss = CLIPLoss()(y_pred, image_feature)
+                loss += 0.1 * F.mse_loss(y_pred, image_feature)
                 val_loss.append(loss.item())
                 
                 # calculate accuracy
                 acc = torch.sum(torch.argmax(probability, dim=1) == label) / len(label)
                 val_acc.append(acc.item())
+        scheduler.step(np.mean(val_loss))
             
         print(f"Pretrain Epoch {epoch+1}/{args.pretrain_epochs} | train loss: {np.mean(train_loss):.3f} | train acc: {np.mean(train_acc):.3f} | val loss: {np.mean(val_loss):.3f} | val acc: {np.mean(val_acc):.3f}")
         torch.save(model.state_dict(), os.path.join(logdir, "model_pretrain_last.pt"))

@@ -10,7 +10,7 @@ downsample_factor = sampling_rate_original // sampling_rate_new
 
 # ベースライン補正の設定
 baseline_start = 0  # ベースライン開始インデックス
-baseline_end = 60  # ベースライン終了インデックス（新しいサンプリングレートでのインデックス）
+baseline_end = 281  # ベースライン終了インデックス（新しいサンプリングレートでのインデックス）
 
 # ダウンサンプリング
 def downsample(data, factor):
@@ -54,19 +54,19 @@ def preprocess_meg(data, downsample_factor, baseline_start, baseline_end, device
 #%%
 if __name__ == '__main__':
     
-    #for split in ['train', 'val', 'test']:
-    #    data = torch.load(f'../data/{split}_X.pt')
-    #    # ダウンサンプリング、ベースライン補正、スケーリング、クリッピング
-    #    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    #    processed_data = preprocess_meg(data, downsample_factor, baseline_start, baseline_end, device)
-#
-    #    # 前処理後のデータを保存
-    #    preprocessed_data = preprocessed_data.cpu()
-    #    torch.save(processed_data, f'../data/{split}_X_preprocessed.pt', pickle_protocol=4)
+    for split in ['val', 'test']: #'train', 
+        data = torch.load(f'../data/{split}_X.pt')
+        # ダウンサンプリング、ベースライン補正、スケーリング、クリッピング
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        processed_data = preprocess_meg(data, downsample_factor, baseline_start, baseline_end, device)
 
-    for split in ['train', 'val', 'test']:
-        data = torch.load(f'../data/{split}_X_preprocessed.pt')
-        data = data.to('cpu')
-        torch.save(data, f'../data/{split}_X_preprocessed.pt', pickle_protocol=4)
+        # 前処理後のデータを保存
+        processed_data = processed_data.cpu()
+        torch.save(processed_data, f'../data/{split}_X_preprocessed.pt', pickle_protocol=4)
+
+    #for split in ['train', 'val', 'test']:
+    #    data = torch.load(f'../data/{split}_X_preprocessed.pt')
+    #    data = data.to('cpu')
+    #    torch.save(data, f'../data/{split}_X_preprocessed.pt', pickle_protocol=4)
         
 # %%

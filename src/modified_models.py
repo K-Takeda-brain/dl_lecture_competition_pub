@@ -24,10 +24,11 @@ class BasicConvClassifier(nn.Module):
         #out_channels: int,
         hidden: tp.Dict[str, int],
         num_channels = 271,
+        feature_dim: int = 768,
         hid_dim: int = 128,
         dilation: int = 2,
         num_subjects: int = 4,
-        subject_emb_dim: int = 4,
+        subject_emb_dim: int = 2,
         coord_dim: int = 2,
         classify: bool = False,
         depth: int = 4,
@@ -71,8 +72,8 @@ class BasicConvClassifier(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.spatial_attention = SpatialAttention(num_channels, 270, coord_dim) # (b, 271, 161) -> (b, 270, 161)
-        self.subject_specific_linear_layer = SubjectSpecificLinearLayer(270, 270, num_subjects, subject_emb_dim) # (b, 270, 161) -> (b, 270, 161)
+        #self.spatial_attention = SpatialAttention(num_channels, 270, coord_dim) # (b, 271, 161) -> (b, 270, 161)
+        self.subject_specific_linear_layer = SubjectSpecificLinearLayer(num_channels, 270, num_subjects, subject_emb_dim) # (b, 270, 161) -> (b, 270, 161)
         
         
         sizes = {}
@@ -100,16 +101,18 @@ class BasicConvClassifier(nn.Module):
 
         self.mlp_projector = nn.Sequential(
             Rearrange("b d 1 -> b d"),
-            nn.Linear(2048, 512),
+            nn.Linear(2048, feature_dim),
+            nn.BatchNorm1d(feature_dim),
             nn.ReLU(),
         )
         
         self.classify = classify
         self.classifier = nn.Sequential(
-            nn.Linear(512, 512),
+            nn.Linear(feature_dim, feature_dim),
+            nn.BatchNorm1d(feature_dim),
             nn.ReLU(),
             nn.Dropout(0.5),  # ドロップアウトを追加
-            nn.Linear(512, num_classes)
+            nn.Linear(feature_dim, num_classes)
         )
             
 
@@ -121,7 +124,7 @@ class BasicConvClassifier(nn.Module):
         Returns:
             X ( b, num_classes ): _description_
         """
-        X = self.spatial_attention(X, pos)
+        #X = self.spatial_attention(X, pos)
         X = self.subject_specific_linear_layer(X, subject_index)
         X = self.encoders['meg'](X)
         X = self.linear(X)

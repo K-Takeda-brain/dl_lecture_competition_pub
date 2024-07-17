@@ -147,7 +147,7 @@ class ThingsMEGDataset(torch.utils.data.Dataset):
         
         if split in ["train", "val"]:
             self.y = torch.load(os.path.join(data_dir, f"{split}_y.pt"))
-            self.image_features = torch.load(os.path.join(data_dir, f"{split}_X_image.pt"))
+            self.image_features = torch.load(os.path.join(data_dir, f"{split}_X_image_large.pt"))
             assert len(torch.unique(self.y)) == self.num_classes, "Number of classes do not match."
         
         self.channel_pos = recording.get_channel_positions()

@@ -11,9 +11,18 @@ from termcolor import cprint
 from tqdm import tqdm
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from src.datasets import ThingsMEGDataset
+from src.datasets import ThingsMEGDataset, MyMNEinfo
 from src.models import BasicConvClassifier
 from src.utils import set_seed
+
+from mne.datasets import sample, spm_face, testing
+from mne.io import (
+    read_raw_artemis123,
+    read_raw_bti,
+    read_raw_ctf,
+    read_raw_fif,
+    read_raw_kit,
+)
 
 #%%
 @hydra.main(version_base=None, config_path="configs", config_name="config")
@@ -29,11 +38,19 @@ def run(args: DictConfig):
     # ------------------
     loader_args = {"batch_size": args.batch_size, "num_workers": args.num_workers}
     
-    train_set = ThingsMEGDataset("train", args.data_dir)
+    loader_args = {"batch_size": args.batch_size, "num_workers": args.num_workers}
+    
+    raw = read_raw_ctf(
+        spm_face.data_path() / "MEG" / "spm" / "SPM_CTF_MEG_example_faces1_3D.ds"
+    )
+    info = raw.info
+    recording = MyMNEinfo(info, ["MLF25",  "MRF43", "MRO13", "MRO11"])
+    
+    train_set = ThingsMEGDataset("train", args.data_dir, recording)
     train_loader = torch.utils.data.DataLoader(train_set, shuffle=True, **loader_args)
-    val_set = ThingsMEGDataset("val", args.data_dir)
+    val_set = ThingsMEGDataset("val", args.data_dir, recording)
     val_loader = torch.utils.data.DataLoader(val_set, shuffle=False, **loader_args)
-    test_set = ThingsMEGDataset("test", args.data_dir)
+    test_set = ThingsMEGDataset("test", args.data_dir, recording)
     test_loader = torch.utils.data.DataLoader(
         test_set, shuffle=False, batch_size=args.batch_size, num_workers=args.num_workers
     )
@@ -64,7 +81,7 @@ def run(args: DictConfig):
         train_loss, train_acc, val_loss, val_acc = [], [], [], []
         
         model.train()
-        for X, y, subject_idxs in tqdm(train_loader, desc="Train"):
+        for X, y, subject_idxs, _, _ in tqdm(train_loader, desc="Train"):
             X, y = X.to(args.device), y.to(args.device)
 
             y_pred = model(X)
@@ -80,7 +97,7 @@ def run(args: DictConfig):
             train_acc.append(acc.item())
 
         model.eval()
-        for X, y, subject_idxs in tqdm(val_loader, desc="Validation"):
+        for X, y, subject_idxs, _, _ in tqdm(val_loader, desc="Validation"):
             X, y = X.to(args.device), y.to(args.device)
             
             with torch.no_grad():
@@ -107,7 +124,7 @@ def run(args: DictConfig):
 
     preds = [] 
     model.eval()
-    for X, subject_idxs in tqdm(test_loader, desc="Validation"):        
+    for X, subject_idxs, _ in tqdm(test_loader, desc="Validation"):        
         preds.append(model(X.to(args.device)).detach().cpu())
         
     preds = torch.cat(preds, dim=0).numpy()
